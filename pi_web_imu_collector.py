@@ -1,9 +1,9 @@
 import asyncio
-import os
 import csv
 from datetime import datetime
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request
 from bleak import BleakScanner, BleakClient
+import threading
 
 app = Flask(__name__)
 
@@ -17,47 +17,77 @@ client = None
 is_connected = False
 recording = False
 csv_file = 'imu_data.csv'
-data_buffer = []  # Buffer data before writing
+data_buffer = []
+loop = asyncio.new_event_loop()  # Single persistent loop
+thread = None
 
 # IMU Notification Handler
 def imu_handler(sender, data):
     global data_buffer
     try:
-        readings = data.decode('utf-8').split(',')
+        readings_str = data.decode('utf-8')
+        print(f"Raw data received: {readings_str}")  # Debug raw
+        readings = readings_str.split(',')
         if len(readings) == 6:
             timestamp = datetime.now().isoformat()
             row = [timestamp] + readings
             data_buffer.append(row)
-            print(f"IMU Data: {row}")
+            print(f"Appended row: {row}")  # Debug appended
+        else:
+            print(f"Invalid length: {len(readings)}")  # Debug invalid
     except Exception as e:
-        print(f"Decode error: {e}")
+        print(f"Handler error: {e}")
+
+# BLE Tasks in Thread
+async def ble_task(action, *args):
+    global client, is_connected, recording
+    try:
+        if action == "connect":
+            devices = await BleakScanner.discover()
+            for d in devices:
+                if d.name == TARGET_NAME:
+                    client = BleakClient(d.address)
+                    await client.connect(timeout=60.0)
+                    is_connected = True
+                    print("Connected successfully!")
+                    return
+            print("Device not found.")
+        elif action == "start" and is_connected:
+            await client.write_gatt_char(CMD_UUID, bytearray([1]))
+            await client.start_notify(IMU_UUID, imu_handler)
+            recording = True
+            print("Notifications started!")
+        elif action == "stop" and recording:
+            await client.write_gatt_char(CMD_UUID, bytearray([0]))
+            await client.stop_notify(IMU_UUID)
+            recording = False
+            print("Notifications stopped!")
+    except Exception as e:
+        print(f"BLE error ({action}): {e}")
+
+def run_ble_task(action, *args):
+    asyncio.run_coroutine_threadsafe(ble_task(action, *args), loop)
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    global is_connected, recording, client, data_buffer
+    global is_connected, recording, data_buffer
     message = ""
     if request.method == 'POST':
         action = request.form['action']
         if action == 'connect':
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(connect_device())
-            message = "Connected!" if is_connected else "Connection failed."
+            run_ble_task("connect")
+            message = "Connecting..." if not is_connected else "Connected!"
         elif action == 'start':
             if is_connected:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(start_recording())
-                message = "Recording started!"
+                run_ble_task("start")
+                message = "Recording started!" if recording else "Start failed."
             else:
                 message = "Connect first!"
         elif action == 'stop':
             if recording:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(stop_recording())
+                run_ble_task("stop")
                 save_csv()
-                message = "Recording stopped and saved to CSV."
+                message = "Stopped and saved to CSV."
             else:
                 message = "Not recording!"
 
@@ -78,46 +108,26 @@ def index():
     </html>
     """, is_connected=is_connected, recording=recording, message=message)
 
-async def connect_device():
-    global client, is_connected
-    try:
-        devices = await BleakScanner.discover()
-        for d in devices:
-            if d.name == TARGET_NAME:
-                client = BleakClient(d.address)
-                await client.connect(timeout=60.0)
-                is_connected = True
-                return
-        print("Device not found.")
-    except Exception as e:
-        print(f"Connection error: {e}")
-        is_connected = False
-
-async def start_recording():
-    global recording
-    try:
-        await client.write_gatt_char(CMD_UUID, bytearray([1]))
-        await client.start_notify(IMU_UUID, imu_handler)
-        recording = True
-    except Exception as e:
-        print(f"Start error: {e}")
-
-async def stop_recording():
-    global recording
-    try:
-        await client.write_gatt_char(CMD_UUID, bytearray([0]))
-        await client.stop_notify(IMU_UUID)
-        recording = False
-    except Exception as e:
-        print(f"Stop error: {e}")
-
 def save_csv():
     global data_buffer
     with open(csv_file, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['timestamp', 'accel_x', 'accel_y', 'accel_z', 'gyro_x', 'gyro_y', 'gyro_z'])
         writer.writerows(data_buffer)
-    data_buffer = []  # Clear buffer
+    print(f"Saved {len(data_buffer)} rows to CSV.")
+    data_buffer = []
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Start loop in thread
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+    thread = threading.Thread(target=run_loop, daemon=True)
+    thread.start()
+
+    # Run Flask with waitress for better async
+    try:
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=5000)
+    except ImportError:
+        app.run(host='0.0.0.0', port=5000, debug=True)

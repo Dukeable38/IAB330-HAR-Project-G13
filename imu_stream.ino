@@ -65,8 +65,15 @@ void streamIMU() {
     IMU.readAcceleration(ax, ay, az);
     IMU.readGyroscope(gx, gy, gz);
     char buffer[64];
-    snprintf(buffer, 64, "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f", ax, ay, az, gx, gy, gz);
-    imuChar.writeValue(buffer);
-    delay(20); // ~50Hz sampling
+    int len = snprintf(buffer, 64, "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f", ax, ay, az, gx, gy, gz);
+    if (len > 0) {
+      imuChar.writeValue(buffer);
+      Serial.print("Sent IMU: "); Serial.println(buffer); // Debug print
+    } else {
+      Serial.println("snprintf failed!");
+    }
+    delay(20); // ~50Hz
+  } else {
+    Serial.println("IMU not available!"); // Debug if sensor fails
   }
 }
