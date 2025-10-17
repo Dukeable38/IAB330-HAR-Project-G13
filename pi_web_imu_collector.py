@@ -3,10 +3,6 @@ import csv
 from datetime import datetime
 from flask import Flask, render_template_string, request
 from bleak import BleakScanner, BleakClient
-import matplotlib.animation as animation
-import pandas as pd
-import matplotlib.pyplot as plt
-
 import threading
 
 app = Flask(__name__)
@@ -41,32 +37,6 @@ def imu_handler(sender, data):
             print(f"Invalid length: {len(readings)}")  # Debug invalid
     except Exception as e:
         print(f"Handler error: {e}")
-
-
-# Global fig and axes for live plot
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-line_ax, line_ay, line_az = ax1.plot([], [], 'r-', label='Accel X'), ax1.plot([], [], 'g-', label='Accel Y'), ax1.plot([], [], 'b-', label='Accel Z')
-line_gx, line_gy, line_gz = ax2.plot([], [], 'r-', label='Gyro X'), ax2.plot([], [], 'g-', label='Gyro Y'), ax2.plot([], [], 'b-', label='Gyro Z')
-ax1.legend(); ax1.set_title('Live Acceleration'); ax1.set_ylabel('g')
-ax2.legend(); ax2.set_title('Live Gyroscope'); ax2.set_ylabel('dps'); ax2.set_xlabel('Samples')
-
-def update_live_plot(frame):
-    if data_buffer:
-        df_live = pd.DataFrame(data_buffer, columns=['timestamp', 'accel_x', 'accel_y', 'accel_z', 'gyro_x', 'gyro_y', 'gyro_z'])
-        index = range(len(df_live))
-        line_ax[0].set_data(index, df_live['accel_x'])
-        line_ay[0].set_data(index, df_live['accel_y'])
-        line_az[0].set_data(index, df_live['accel_z'])
-        ax1.relim(); ax1.autoscale_view()
-
-        line_gx[0].set_data(index, df_live['gyro_x'])
-        line_gy[0].set_data(index, df_live['gyro_y'])
-        line_gz[0].set_data(index, df_live['gyro_z'])
-        ax2.relim(); ax2.autoscale_view()
-    return line_ax + line_ay + line_az + line_gx + line_gy + line_gz
-
-ani = animation.FuncAnimation(fig, update_live_plot, interval=1000)  # Update every 1s
-plt.show(block=False)  # Run in background
 
 # BLE Tasks
 async def ble_task(action):
