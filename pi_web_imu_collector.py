@@ -32,41 +32,9 @@ def imu_handler(sender, data):
             timestamp = datetime.now().isoformat()
             row = [timestamp] + readings
             data_buffer.append(row)
-            print(f"Appended row: {row}")  # Debug appended
-        else:
-            print(f"Invalid length: {len(readings)}")  # Debug invalid
+            print(f"IMU Data: {row}")
     except Exception as e:
-        print(f"Handler error: {e}")
-
-# BLE Tasks in Thread
-async def ble_task(action, *args):
-    global client, is_connected, recording
-    try:
-        if action == "connect":
-            devices = await BleakScanner.discover()
-            for d in devices:
-                if d.name == TARGET_NAME:
-                    client = BleakClient(d.address)
-                    await client.connect(timeout=60.0)
-                    is_connected = True
-                    print("Connected successfully!")
-                    return
-            print("Device not found.")
-        elif action == "start" and is_connected:
-            await client.write_gatt_char(CMD_UUID, bytearray([1]))
-            await client.start_notify(IMU_UUID, imu_handler)
-            recording = True
-            print("Notifications started!")
-        elif action == "stop" and recording:
-            await client.write_gatt_char(CMD_UUID, bytearray([0]))
-            await client.stop_notify(IMU_UUID)
-            recording = False
-            print("Notifications stopped!")
-    except Exception as e:
-        print(f"BLE error ({action}): {e}")
-
-def run_ble_task(action, *args):
-    asyncio.run_coroutine_threadsafe(ble_task(action, *args), loop)
+        print(f"Decode error: {e}")
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -75,8 +43,10 @@ def index():
     if request.method == 'POST':
         action = request.form['action']
         if action == 'connect':
-            run_ble_task("connect")
-            message = "Connecting..." if not is_connected else "Connected!"
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(connect_device())
+            message = "Connected!" if is_connected else "Connection failed."
         elif action == 'start':
             if is_connected:
                 run_ble_task("start")
@@ -118,16 +88,4 @@ def save_csv():
     data_buffer = []
 
 if __name__ == '__main__':
-    # Start loop in thread
-    def run_loop():
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
-    thread = threading.Thread(target=run_loop, daemon=True)
-    thread.start()
-
-    # Run Flask with waitress for better async
-    try:
-        from waitress import serve
-        serve(app, host='0.0.0.0', port=5000)
-    except ImportError:
-        app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
